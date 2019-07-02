@@ -1,0 +1,4 @@
+{
+    "fastq_dir":"fastq",
+    "use_umi":false
+}

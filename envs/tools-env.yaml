@@ -1,0 +1,11 @@
+channels:
+ - bioconda
+dependencies:
+ - emboss
+ - samtools
+ - umi_tools
+ - cutadapt
+ - trimmomatic
+ - pear
+ - fastqc
+ - multiqc
