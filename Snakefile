@@ -1,19 +1,26 @@
 import glob
 import os.path
+import re
 configfile: "config.json"
 #load samples from fastq folder
 #samples<-list.files(paste0(getwd(),"/fastq")) # loads all files in the fastq folder
 #samples_fp<-paste0(getwd(),"/fastq/",samples)
-(SAMPLES, SNUMS, LANES, READS) = glob_wildcards(os.path.join(config['fastq_dir'], config['pattern']))
+fq_files=glob.glob(os.path.join(config['fastq_dir'], "*.fastq.gz"))
+r = re.compile("(.*)(_S[0-9].*)?(_L00[1-9])?_R[12](_001)?.fastq.gz")
+fq_files= list(filter(r.match,fq_files))
+print(fq_files)
+SAMPLES=list(set([r.match(x).group(1)[len(config['fastq_dir'])+1::] for x in fq_files]))
+#SAMPLES, = glob_wildcards(os.path.join(config['fastq_dir'], "{sid}(_S[0-9].*)?(_L00[1-9])?_R[12](_001)?.fastq.gz"))
+print(SAMPLES)
 
 def remap(wildcards):
     # Miseq files end in _001.fastq.gz ; NWCH Hiseq files do not
     # r1list = glob.glob(os.path.join(config['fastq_dir'], wildcards.sample + "_*_R1.fastq.gz")) # usu ends in _001.fastq.gz; not NWCH
     # r2list = glob.glob(os.path.join(config['fastq_dir'], wildcards.sample + "_*_R2.fastq.gz"))
-    r1_glob_pattern = os.path.join(config['fastq_dir'], wildcards.sample + "_*_R1")
-    r2_glob_pattern = os.path.join(config['fastq_dir'], wildcards.sample + "_*_R2")
-    r1_glob_pattern += "*.fastq"
-    r2_glob_pattern += "*.fastq"
+    r1_glob_pattern = os.path.join(config['fastq_dir'], wildcards.sample + "_*R1")
+    r2_glob_pattern = os.path.join(config['fastq_dir'], wildcards.sample + "_*R2")
+    r1_glob_pattern += "*.fastq.gz"
+    r2_glob_pattern += "*.fastq.gz"
 
     r1list = glob.glob(r1_glob_pattern)
     r2list = glob.glob(r2_glob_pattern)
@@ -22,47 +29,59 @@ def remap(wildcards):
     r2file = r2list[0]
     return [r1file, r2file]
 
+def umi_switch(wildcards):
+    if(config["use_umi"]):
+        return "output/fastq_umi/"+wildcards.sample+".fastq"
+    else:
+        return "output/cutadapt3p/"+wildcards.sample+".fastq"
 
+rule all:
+    input:expand("output/bam/{sample}.bam.bai",sample=SAMPLES)
+
+"""
+NOT USED
+"""
 rule decompress:
     input:"fastq/{sample}.fastq.gz"
     output:"fastq/{sample}.fastq"
     # TODO: should I assume gzip is installed?
-    shell:"gzip -d input"
+    shell:"gzip -d -c {input} > {output}"
 
 rule merge_read_pairs:
     input:remap
-    output:"fastq_merged/{sample}.fastq"
-    log:"PEAR_output_folder/{sample}.PEARreport.txt"
+    output:"output/fastq_merged/{sample}.assembled.fastq"
+    log:"logs/pear/{sample}.PEARreport.txt"
     conda:"envs/tools-env.yaml"
-    shell:"pear -f {input[0]} -r {input[1]} -o {output} -j 39 > {log}"
+    threads:1
+    shell:"pear -j {threads} -f {input[0]} -r {input[1]} -o output/fastq_merged/{wildcards.sample} > {log}"
 
 rule trimmomatic:
-    input:"fastq_merged/{sample}.fastq"
-    output:"fastq_trimmed/{sample}.trimmed.fastq"
+    input:"output/fastq_merged/{sample}.assembled.fastq"
+    output:"output/fastq_trimmed/{sample}.trimmed.fastq"
     conda:"envs/tools-env.yaml"
     shell:"trimmomatic SE {input} {output} SLIDINGWINDOW:4:15 MINLEN:100"
 
 #run cutadapt to keep only fastqs that have the full flanking primer sequences
 #5 prime adapter = V6/7F:  TCGAGCTCAAGCTTCGG
 rule cutadapt5p:
-    input:"fastq_trimmed/{sample}.trimmed.fastq"
-    output:"cutadapt5p/{sample}.fastq"
+    input:"output/fastq_trimmed/{sample}.trimmed.fastq"
+    output:"output/cutadapt5p/{sample}.fastq"
     conda:"envs/tools-env.yaml"
     #changed to allow full adapter sequence anywhere to accomodate UMI.  If this doesn't work change X to ^.
     shell:"cutadapt -g XTCGAGCTCAAGCTTCGG --discard-untrimmed -e 0.01 --action=none -o {output} {input}"
 
 #3 prime adapter = V6/7R:  GACCTCGAGACAAATGGCAG (reverse complement of the primer sequence 5'-3')    
 rule cutadapt3p:
-    input:"cutadapt5p/{sample}.fastq"
-    output:"cutadapt3p/{sample}.fastq"
+    input:"output/cutadapt5p/{sample}.fastq"
+    output:"output/cutadapt3p/{sample}.fastq"
     conda:"envs/tools-env.yaml"
     #changed to allow full adapter sequence anywhere to accomodate UMI.  If this doesn't work change X to ^.
     shell:"cutadapt -a GACCTCGAGACAAATGGCAG$ --discard-untrimmed -e 0.01 --action=none -o {output} {input}"
 
 # run fastqc on trimmed and demultiplexed input files
 rule fastqc:
-    input:"cutadapt3p/{sample}.fastq"
-    output:"fastqc/{sample}.html"
+    input:"output/cutadapt3p/{sample}.fastq"
+    output:"output/fastqc/{sample}.html"
     conda:"envs/tools-env.yaml"
     shell:"fastqc -o fastqc/ {input}"
 
@@ -73,23 +92,30 @@ rule fastqc:
 
 # extract UMI tags (optional)
 rule umi_extract:
-    input:"cutadapt3p/{sample}.fastq"
-    output:"fastq_umi/{sample}.fastq"
-    log:"umi_log/{sample}.log"
+    input:"output/cutadapt3p/{sample}.fastq"
+    output:"output/fastq_umi/{sample}.fastq"
+    log:"logs/umi_extract/{sample}.log"
     conda:"envs/tools-env.yaml"
     shell:"umi_tools extract --stdin={input} --bc-pattern=NNNNNNNNNN --log={log} --stdout={output}"
 
 rule needleall:
     input:umi_switch
-    output:"needleall/{sample}.sam"
-    log:"needleall_log/{sample}.error"
+    output:"output/needleall/{sample}.sam"
+    log:"logs/needleall/{sample}.error"
     conda:"envs/tools-env.yaml"
-    shell:"needleall -aformat3 sam -gapextend 0.25 -gapopen 10.0 -awidth3=5000 -asequence references/ -bsequence {input} -outfile {output} -errfile {log}"
+    shell:"needleall -aformat3 sam -gapextend 0.25 -gapopen 10.0 -awidth3=5000 -asequence references/gestalt_pipeline4.fasta -bsequence {input} -outfile {output} -errfile {log}"
 
 rule altersam:
-    input:"needleall/{sample}.sam"
-    output:""
-    shell:""
+    input:
+        sam="output/needleall/{sample}.sam",
+        header="references/sam_header.tsv"
+    output:"output/bam/{sample}.bam"
+    shell:"cat {input.header} <(grep -v ^@ {input.sam} | awk '{{if ($4==1){{print}}}}') | samtools view -hb | samtools sort> {output}"
+
+rule index:
+    input:"output/bam/{sample}.bam"
+    output:"output/bam/{sample}.bam.bai"
+    shell:"samtools index {input}"
 
 # fix sam file header and select only reads matching at position 1
 # for (i in 1:length(sam_temp_files)) {
