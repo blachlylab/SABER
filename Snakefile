@@ -36,7 +36,7 @@ def umi_switch(wildcards):
         return "output/cutadapt3p/"+wildcards.sample+".fastq"
 
 rule all:
-    input:expand("output/bam/{sample}.bam.bai",sample=SAMPLES)
+    input:"analysis.done"
 
 """
 NOT USED
@@ -110,12 +110,24 @@ rule altersam:
         sam="output/needleall/{sample}.sam",
         header="references/sam_header.tsv"
     output:"output/bam/{sample}.bam"
+    conda:"envs/tools-env.yaml"
     shell:"cat {input.header} <(grep -v ^@ {input.sam} | awk '{{if ($4==1){{print}}}}') | samtools view -hb | samtools sort> {output}"
 
 rule index:
     input:"output/bam/{sample}.bam"
     output:"output/bam/{sample}.bam.bai"
+    conda:"envs/tools-env.yaml"
     shell:"samtools index {input}"
+
+rule analysis:
+    input:expand("output/bam/{sample}.bam.bai",sample=SAMPLES)
+    output:touch("analysis.done")
+    conda:"envs/r-env.yaml"
+    shell:"""
+    Rscript scripts/installrpy.R
+    Rscript scripts/analysis.R
+    """
+    
 
 # fix sam file header and select only reads matching at position 1
 # for (i in 1:length(sam_temp_files)) {

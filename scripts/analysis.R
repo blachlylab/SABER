@@ -752,6 +752,6 @@ p5
 save_plot(plot = p5, filename = "output/informative_boxplot_a1332.pdf", base_width = 2.5, base_height = 2.3)
 
 # clean up directories
-dir.create("fastq")
+#dir.create("fastq")
 
 
