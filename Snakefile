@@ -29,14 +29,21 @@ def remap(wildcards):
     r2file = r2list[0]
     return [r1file, r2file]
 
-def umi_switch(wildcards):
+def umi_trim_switch(wildcards):
     if(config["use_umi"]):
         return "output/fastq_umi/"+wildcards.sample+".fastq"
     else:
         return "output/cutadapt3p/"+wildcards.sample+".fastq"
 
+def umi_bam_switch(wildcards):
+    if(config["use_umi"]):
+        return expand("output/dedup/{sample}.bam.bai",sample=SAMPLES)
+    else:
+        return expand("output/bam/{sample}.bam.bai",sample=SAMPLES)
+
+
 rule all:
-    input:"analysis.done"
+    input:"analysis.done","output/multiqc/multiqc_report.html"
 
 """
 NOT USED
@@ -81,14 +88,16 @@ rule cutadapt3p:
 # run fastqc on trimmed and demultiplexed input files
 rule fastqc:
     input:"output/cutadapt3p/{sample}.fastq"
-    output:"output/fastqc/{sample}.html"
+    output:"output/fastqc/{sample}_fastqc.html","output/fastqc/{sample}_fastqc.zip"
     conda:"envs/tools-env.yaml"
-    shell:"fastqc -o fastqc/ {input}"
+    shell:"fastqc -o output/fastqc/ {input}"
 
-#rule multiqc:
-    #input:
 # run multiqc to summarize the qc files
-#system(paste0('multiqc -d ',output_folder," -o ",output_folder))
+rule multiqc:
+    input:expand("output/fastqc/{sample}_fastqc.html",sample=SAMPLES)
+    output:"output/multiqc/multiqc_report.html"
+    conda:"envs/tools-env.yaml"
+    shell:"multiqc -d output/fastqc/ -o output/multiqc/"
 
 # extract UMI tags (optional)
 rule umi_extract:
@@ -105,6 +114,7 @@ rule needleall:
     conda:"envs/tools-env.yaml"
     shell:"needleall -aformat3 sam -gapextend 0.25 -gapopen 10.0 -awidth3=5000 -asequence references/gestalt_pipeline4.fasta -bsequence {input} -outfile {output} -errfile {log}"
 
+# fix sam file header and select only reads matching at position 1
 rule altersam:
     input:
         sam="output/needleall/{sample}.sam",
@@ -114,13 +124,22 @@ rule altersam:
     shell:"cat {input.header} <(grep -v ^@ {input.sam} | awk '{{if ($4==1){{print}}}}') | samtools view -hb | samtools sort> {output}"
 
 rule index:
-    input:"output/bam/{sample}.bam"
-    output:"output/bam/{sample}.bam.bai"
+    input:"{fn}.bam"
+    output:"{fn}.bam.bai"
     conda:"envs/tools-env.yaml"
     shell:"samtools index {input}"
 
+rule dedup:
+    input:
+        bam="output/bam/{sample}.bam",
+        bai="output/bam/{sample}.bam.bai"
+    output:"output/dedup/{sample}.bam"
+    conda:"envs/tools-env.yaml"
+    shell:"umi_tools dedup --method=unique -I {input.bam} --output-stats= output/dedup/{wildcards.sample} -S {output}"
+
+
 rule analysis:
-    input:expand("output/bam/{sample}.bam.bai",sample=SAMPLES)
+    input:umi_bam_switch
     output:touch("analysis.done")
     conda:"envs/r-env.yaml"
     shell:"""
@@ -128,68 +147,3 @@ rule analysis:
     Rscript scripts/analysis.R
     """
     
-
-# fix sam file header and select only reads matching at position 1
-# for (i in 1:length(sam_temp_files)) {
-#   samdf<-read.delim(sam_temp_fp[i], sep="\t", header = FALSE)#read in sam file
-#   samdf<-samdf[-(1:2),]#chop off the old header
-#   samdf<-samdf[which(samdf$V4=="1"),]#select only reads mapping to coordinate 1
-#   sam_header<-read.table("references/sam_header.csv", fill=TRUE, header=FALSE, sep=",", colClasses=(rep("character",13)))# read in standard sam header
-#   names(sam_header)<-paste("V", 1:13, sep="")
-#   samdf<-rbind(sam_header,samdf)
-#   write_tsv(samdf, na = "", path = sam_temp_fp[i],col_names = FALSE, append=FALSE)
-# }
-# sam_temp_files<-list.files(sam_temp); sam_temp_fp<-paste0(sam_temp,"/",sam_temp_files)
-
-# convert sam to bam
-# foreach(i=1:length(sam_temp_files)) %dopar% {
-#   cmd<-paste0("samtools view -S -b ",sam_temp_fp[i]," > ",bam_temp,"/",mid_names[i],".bam")
-#   message(cmd,"\n"); system(cmd)
-# }
-
-# bam_temp_files<-list.files(path = bam_temp); bam_temp_fp<-paste0(bam_temp,"/",bam_temp_files)
-
-
-# sort and index bam
-# foreach(i=1:length(bam_temp_fp)) %dopar% {
-#   cmd<-paste0("samtools sort ",bam_temp_fp[i]," -o ",bam_temp_fp[i])
-#   message(cmd, "\n"); system(cmd)
-# }
-
-# foreach(i=1:length(bam_temp_fp)) %dopar% {
-#   cmd<-paste0("samtools index ",bam_temp_fp[i])
-#   message(cmd, "\n"); system(cmd)
-# }
-
-# system(paste0("cp -r temp/bam_temp ",bam_output_folder))#move final bam files and indices to output
-
-#deduplicate, sort and index UMI tagged reads (optional)
-# if (use_UMI==TRUE){
-#   foreach(i=1:length(fastq_umi_out_files)) %dopar% {
-#     cmd<-paste0("umi_tools dedup --method=unique -I ",bam_temp_fp[i]," --output-stats=",bam_dedup_output_folder,"/",mid_names[i]," -S ",bam_dedup,"/",mid_names[i],".dedup.bam") 
-#     message(cmd, "\n"); system(cmd)
-#   }
-#   bam_dedup_files<-list.files(path = bam_dedup); bam_dedup_fp<-paste0(bam_dedup,"/",bam_dedup_files)
-  
-#   foreach(i=1:length(bam_dedup_fp)) %dopar% {
-#     cmd<-paste0("samtools sort ",bam_dedup_fp[i]," -o ",bam_dedup_fp[i])
-#     message(cmd, "\n"); system(cmd)
-#   }
-  
-#   foreach(i=1:length(bam_dedup_fp)) %dopar% {
-#     cmd<-paste0("samtools index ",bam_dedup_fp[i])
-#     message(cmd, "\n"); system(cmd)
-#   }
-#   system(paste0("cp -r temp/bam_dedup ", bam_dedup_output_folder))
-# }
-
-#build metadata for experiment
-# if (use_UMI==TRUE){
-#   bam_fnames<-bam_dedup_fp
-# } else {
-#   bam_fnames <- bam_temp_fp
-# }
-# group_desig<-rep(group_name, times=length(bam_fnames))
-# md<-read.csv("references/blank_metadata.csv", header = TRUE)
-# newrow<-data.frame(bamfile=bam_fnames, directory=getwd(),Short.name=mid_names,Targeting.type="",sgRNA1="",sgRNA2="",Group=group_desig)
-# md<-rbind(md,newrow)

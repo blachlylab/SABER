@@ -22,6 +22,7 @@ library(viridis)
 library(ggExtra)
 library(tidyverse)
 library(ggrepel)
+library(jsonlite)
 
 
 ####version notes####
@@ -100,7 +101,8 @@ group_name<-"training_set"
 
 threshold<-200# number of reads below which they don't appear on the big crispr plot
 
-use_UMI<-FALSE#works how you think it should work
+#use_UMI<-FALSE#works how you think it should work
+use_UMI<-fromJSON("config.json")$use_umi
 
 
 ####core pipeline####
@@ -122,8 +124,8 @@ fastq_merged<-paste0(getwd(),"/fastq_merged")
 cutadapt1_folder<-paste0(getwd(),"/cutadapt5p")
 cutadapt2_folder<-paste0(getwd(),"/cutadapt3p")
 fastq_umi_out<-paste0(getwd(),"/fastq_umi")
-bam_dedup<-paste0(getwd(),"/bam_dedup")
-bam_dedup_output_folder<-paste0(output_folder,"/bam_dedup_output")
+bam_dedup<-paste0(getwd(),"/dedup")
+bam_dedup_output_folder<-paste0(output_folder,"/dedup")
 
 bam_files<-list.files(path = bam_output_folder,".*.bam$"); bam_fp<-paste0(bam_output_folder,"/",bam_files)
 
@@ -132,7 +134,7 @@ bam_files
 mid_names<-substr(bam_files, 6,10)
 
 if (use_UMI==TRUE){
-    bam_dedup_files<-list.files(path = bam_dedup); bam_dedup_fp<-paste0(bam_dedup,"/",bam_dedup_files)
+    bam_dedup_files<-list.files(path = bam_dedup_output_folder,".*.bam$"); bam_dedup_fp<-paste0(bam_dedup_output_folder,"/",bam_dedup_files)
 }
 
 #build metadata for experiment
