@@ -108,7 +108,7 @@ rule umi_extract:
     shell:"umi_tools extract --stdin={input} --bc-pattern=NNNNNNNNNN --log={log} --stdout={output}"
 
 rule needleall:
-    input:umi_switch
+    input:umi_trim_switch
     output:"output/needleall/{sample}.sam"
     log:"logs/needleall/{sample}.error"
     conda:"envs/tools-env.yaml"
