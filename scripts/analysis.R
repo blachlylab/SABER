@@ -106,8 +106,6 @@ use_UMI<-fromJSON("config.json")$use_umi
 
 
 ####core pipeline####
-# set path
-#Sys.setenv(PATH = "/home/OSUMC.EDU/blas02/miniconda3/bin:/opt/bcl2fastq:/opt/cellranger-3.0.2:/home/OSUMC.EDU/blas02/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin")
 #setup parallel backend to use many processors
 cores=detectCores()
 cl <- makeCluster(cores[1]-1) #not to overload your computer

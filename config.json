@@ -1,5 +1,3 @@
 {
-    "fastq_dir":"fastq",
-    "use_umi":true,
-    "output":"output_testing"
+    "use_umi":true
 }
