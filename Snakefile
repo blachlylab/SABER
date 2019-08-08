@@ -57,6 +57,9 @@ def umi_bam_switch(wildcards):
     else:
         return expand(wildcards.project+"_output/bam/{sample}.bam.bai",sample=INPUTSAMPLES(wildcards))
 
+rule normal_run:
+    input: "gestalt_output/analysis.done","gestalt_output/multiqc/multiqc_report.html"
+
 rule testing:
     input: "testing_output/analysis.done","testing_output/multiqc/multiqc_report.html"
 
@@ -161,7 +164,16 @@ rule dedup:
 
 rule analysis:
     input:umi_bam_switch
-    output:touch("{project}_output/analysis.done")
+    output:touch("gestalt_output/analysis.done")
+    conda:"envs/r-env.yaml"
+    shell:"""
+    Rscript scripts/installrpy.R
+    Rscript scripts/analysis.R
+    """
+
+rule testing_analysis:
+    input:umi_bam_switch
+    output:touch("testing_output/analysis.done")
     conda:"envs/r-env.yaml"
     shell:"""
     Rscript scripts/installrpy.R
@@ -170,7 +182,7 @@ rule analysis:
 
 rule analysis_validation:
     input:umi_bam_switch
-    output:touch("{project}_output/validation.done")
+    output:touch("validation_output/validation.done")
     conda:"envs/r-env.yaml"
     shell:"""
     Rscript scripts/installrpy.R
