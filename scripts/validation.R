@@ -1,3 +1,4 @@
+args=commandArgs(trailingOnly=TRUE)
 ####libraries####
 library(CrispRVariants) 
 library("Rsamtools")
@@ -98,197 +99,17 @@ threshold<-200# number of reads below which they don't appear on the big crispr 
 
 thresh<-0;tvaf<-1;tpaf<-0.1#threshold settings for main analysis pipeline
 
-use_UMI<-FALSE#works how you think it should work
-
-####core pipeline####
-# set path
-Sys.setenv(PATH = "/home/OSUMC.EDU/blas02/miniconda3/bin:/opt/bcl2fastq:/opt/cellranger-3.0.2:/home/OSUMC.EDU/blas02/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin")
-
 #setup parallel backend to use many processors
 cores=detectCores()
 cl <- makeCluster(cores[1]-1) #not to overload your computer
 registerDoParallel(cl)
 
 # make working subdirectories and create variables 
-system("mkdir output_validation"); output_folder<-"output_validation"
-system("mkdir temp"); temp_folder<-paste0(getwd(),"/temp")
-system("mkdir temp/fastq_split_R1"); fastq_split_R1_folder<-paste0(getwd(),"/temp/fastq_split_R1") 
-system("mkdir temp/fastq_split_R2"); fastq_split_R2_folder<-paste0(getwd(),"/temp/fastq_split_R2") 
-system("mkdir temp/bam_temp"); bam_temp<-paste0(getwd(),"/temp/bam_temp")
-system(paste0("mkdir ",output_folder,"/fastqc_files")); fastqc_files_folder<-paste0(output_folder,"/fastqc_files")
-system(paste0("mkdir ",output_folder,"/bam_output")); bam_output_folder<-paste0(output_folder,"/bam_output")
-system(paste0("mkdir ",output_folder,"/PEAR_output")); PEAR_output_folder<-paste0(output_folder,"/PEAR_output")
-system("mkdir temp/fastq_trimmed"); fastq_trimmed<-paste0(getwd(),"/temp/fastq_trimmed")
-system("mkdir temp/fastq_merged"); fastq_merged<-paste0(getwd(),"/temp/fastq_merged")
-system("mkdir temp/sam_temp"); sam_temp<-paste0(getwd(),"/temp/sam_temp")
-system("mkdir temp/cutadapt1"); cutadapt1_folder<-paste0(getwd(),"/temp/cutadapt1")
-system("mkdir temp/cutadapt2"); cutadapt2_folder<-paste0(getwd(),"/temp/cutadapt2")
-system("mkdir temp/fastq_umi_out"); fastq_umi_out<-paste0(getwd(),"/temp/fastq_umi_out")
-system("mkdir temp/bam_dedup"); bam_dedup<-paste0(getwd(),"/temp/bam_dedup")
-system(paste0("mkdir ",output_folder,"/bam_dedup_output")); bam_dedup_output_folder<-paste0(output_folder,"/bam_dedup_output")
+output_folder<-"validation_output"
+bam_files<-list.files(path = args[2],".*.bam")
+bam_fnames<-paste0(args[2],"/",bam_files)
+mid_names<-substr(bam_files, 6,10)
 
-#load samples from fastq folder
-samples<-list.files(paste0(getwd(),"/fastq")) # loads all files in the fastq folder
-samples_fp<-paste0(getwd(),"/fastq/",samples)
-
-#unzip
-foreach(i=1:length(samples_fp)) %dopar% {
-  cmd<-paste0("gzip -d ",samples_fp[i])
-  message(cmd, "\n"); system(cmd)
-}
-
-samples<-list.files(paste0(getwd(),"/fastq")) # loads all files in the fastq folder
-samples_fp<-paste0(getwd(),"/fastq/",samples)
-
-#put into fastq_split_R1 and R2 folders
-foreach(i=1:length(samples_fp)) %dopar% {
-  if (grepl("_R1_",samples_fp[i])==TRUE){
-    cmd<-paste0("cp ",samples_fp[i]," ",fastq_split_R1_folder)
-    message(cmd, "\n"); system(cmd)
-  } else{
-    cmd<-paste0("cp ",samples_fp[i]," ",fastq_split_R2_folder)
-    message(cmd, "\n"); system(cmd)
-  }
-}
-
-fastq_split_R1_files<-list.files(fastq_split_R1_folder); fastq_split_R1_fp<-paste0(fastq_split_R1_folder,"/",fastq_split_R1_files)
-fastq_split_R2_files<-list.files(fastq_split_R2_folder); fastq_split_R2_fp<-paste0(fastq_split_R2_folder,"/",fastq_split_R2_files)
-
-
-# merge read pairs with PEAR
-mid_names<-substr(fastq_split_R1_files, 6,13)
-for(i in 1:length(fastq_split_R1_fp)){
-  cmd<-paste0("pear -f ",fastq_split_R1_fp[i]," -r ",fastq_split_R2_fp[i]," -o ",fastq_merged,"/",mid_names[i], " -j 39 > ",PEAR_output_folder,"/",mid_names[i],".PEARreport.txt")
-  message(cmd, "\n"); system(cmd)
-}
-unlink(paste0(fastq_merged,"/*unassembled*"),recursive = TRUE)
-unlink(paste0(fastq_merged,"/*discarded*"),recursive = TRUE)
-fastq_merged_files<-list.files(fastq_merged); fastq_merged_fp<-paste0(fastq_merged,"/",fastq_merged_files)
-
-
-#run trimmomatic on split and ordered files
-mid_names<-substr(fastq_merged_files, 1,5)
-foreach(i=1:length(fastq_merged_fp)) %dopar% {
-  cmd<-paste0("java -jar /opt/Trimmomatic-0.38/trimmomatic-0.38.jar SE ", #invoke trimmomatic
-              fastq_merged_fp[i]," ",# merged read input
-              fastq_trimmed,"/",mid_names[i],".trimmed.fastq ",# merged trimmed output
-              "SLIDINGWINDOW:4:15 MINLEN:100")# trim parameters.  
-  message(cmd, "\n"); system(cmd)
-}
-fastq_trimmed_files<-list.files(fastq_trimmed); fastq_trimmed_fp<-paste0(fastq_trimmed,"/",fastq_trimmed_files)
-
-#run cutadapt to keep only fastqs that have the full flanking primer sequences
-#5 prime adapter = V6/7F:  TCGAGCTCAAGCTTCGG
-mid_names<-substr(fastq_trimmed_files, 1,5)
-foreach(i=1:length(fastq_trimmed_fp)) %dopar% {
-  cmd<-paste0("cutadapt -g XTCGAGCTCAAGCTTCGG --discard-untrimmed -e 0.01 --action=none -o ",cutadapt1_folder,"/",mid_names[i],".cutadapt1.fastq ",fastq_trimmed_fp[i])#changed to allow full adapter sequence anywhere to accomodate UMI.  If this doesn't work change X to ^.
-  message(cmd, "\n"); system(cmd)
-}
-cutadapt1_files<-list.files(cutadapt1_folder); cutadapt1_fp<-paste0(cutadapt1_folder,"/",cutadapt1_files)
-
-#3 prime adapter = V6/7R:  GACCTCGAGACAAATGGCAG (reverse complement of the primer sequence 5'-3')
-mid_names<-substr(cutadapt1_files, 1,5)
-foreach(i=1:length(cutadapt1_fp)) %dopar% {
-  cmd<-paste0("cutadapt -a GACCTCGAGACAAATGGCAG$ --discard-untrimmed -e 0.01 --action=none -o ",cutadapt2_folder,"/",mid_names[i],".cutadapt2.fastq ",cutadapt1_fp[i])
-  message(cmd, "\n"); system(cmd)
-}
-cutadapt2_files<-list.files(cutadapt2_folder); cutadapt2_fp<-paste0(cutadapt2_folder,"/",cutadapt2_files)
-
-
-# run fastqc on trimmed and demultiplexed input files
-foreach(i=1:length(cutadapt2_fp)) %dopar% {
-  cmd<-paste0("fastqc -o ",fastqc_files_folder," ",cutadapt2_fp[i])
-  message(cmd, "\n"); system(cmd)
-}
-
-# run multiqc to summarize the qc files
-system(paste0('multiqc -d ',output_folder," -o ",output_folder))
-
-# extract UMI tags (optional)
-mid_names<-substr(cutadapt2_files, 1,5)
-if (use_UMI==TRUE){
-  foreach(i=1:length(cutadatpt2_fp)) %dopar% {
-    cmd<-paste0("umi_tools extract --stdin=",fastq_trimmed_fp[i]," --bc-pattern=NNNNNNNNNN --log=",
-                output_folder,"/UMI.log --stdout=",fastq_umi_out,"/",mid_names[i],".processed.fastq")
-    message(cmd, "\n"); system(cmd)
-  }
-  fastq_umi_out_files<-list.files(fastq_umi_out); fastq_umi_out_fp<-paste0(fastq_umi_out,"/",fastq_umi_out_files)
-}
-
-# align with needleall
-if (use_UMI==TRUE){
-  foreach(i=1:length(cutadapt2_files)) %dopar% {
-    cmd<-paste0("needleall -aformat3 sam -gapextend 0.25 -gapopen 10.0 -awidth3=5000 -asequence ",genome_fp," -bsequence ",fastq_umi_out_fp[i]," -outfile ",sam_temp,"/",mid_names[i],".sam -errfile ",output_folder,"/needleall.error")
-    message(cmd, "\n"); system(cmd)
-  }
-} else {
-  foreach(i=1:length(cutadapt2_files)) %dopar% {
-    cmd<-paste0("needleall -aformat3 sam -gapextend 0.25 -gapopen 10.0 -awidth3=5000 -asequence ",genome_fp," -bsequence ",cutadapt2_fp[i]," -outfile ",sam_temp,"/",mid_names[i],".sam -errfile ",output_folder,"/needleall.error")
-    message(cmd, "\n"); system(cmd)
-  }
-}
-
-sam_temp_files<-list.files(sam_temp); sam_temp_fp<-paste0(sam_temp,"/",sam_temp_files)
-
-# fix sam file header and select only reads matching at position 1
-for (i in 1:length(sam_temp_files)) {
-  samdf<-read.delim(sam_temp_fp[i], sep="\t", header = FALSE)#read in sam file
-  samdf<-samdf[-(1:2),]#chop off the old header
-  samdf<-samdf[which(samdf$V4=="1"),]#select only reads mapping to coordinate 1
-  sam_header<-read.table("references/sam_header.csv", fill=TRUE, header=FALSE, sep=",", colClasses=(rep("character",13)))# read in standard sam header
-  names(sam_header)<-paste("V", 1:13, sep="")
-  samdf<-rbind(sam_header,samdf)
-  write_tsv(samdf, na = "", path = sam_temp_fp[i],col_names = FALSE, append=FALSE)
-}
-sam_temp_files<-list.files(sam_temp); sam_temp_fp<-paste0(sam_temp,"/",sam_temp_files)
-
-# convert sam to bam
-foreach(i=1:length(sam_temp_files)) %dopar% {
-  cmd<-paste0("samtools view -S -b ",sam_temp_fp[i]," > ",bam_temp,"/",mid_names[i],".bam")
-  message(cmd,"\n"); system(cmd)
-}
-
-bam_temp_files<-list.files(path = bam_temp); bam_temp_fp<-paste0(bam_temp,"/",bam_temp_files)
-
-# sort and index bam
-foreach(i=1:length(bam_temp_fp)) %dopar% {
-  cmd<-paste0("samtools sort ",bam_temp_fp[i]," -o ",bam_temp_fp[i])
-  message(cmd, "\n"); system(cmd)
-}
-
-foreach(i=1:length(bam_temp_fp)) %dopar% {
-  cmd<-paste0("samtools index ",bam_temp_fp[i])
-  message(cmd, "\n"); system(cmd)
-}
-
-system(paste0("cp -r temp/bam_temp ",bam_output_folder))#move final bam files and indices to output
-
-#deduplicate, sort and index UMI tagged reads (optional)
-if (use_UMI==TRUE){
-  foreach(i=1:length(fastq_umi_out_files)) %dopar% {
-    cmd<-paste0("umi_tools dedup --method=unique -I ",bam_temp_fp[i]," --output-stats=",bam_dedup_output_folder,"/",mid_names[i]," -S ",bam_dedup,"/",mid_names[i],".dedup.bam") 
-    message(cmd, "\n"); system(cmd)
-  }
-  bam_dedup_files<-list.files(path = bam_dedup); bam_dedup_fp<-paste0(bam_dedup,"/",bam_dedup_files)
-  
-  foreach(i=1:length(bam_dedup_fp)) %dopar% {
-    cmd<-paste0("samtools sort ",bam_dedup_fp[i]," -o ",bam_dedup_fp[i])
-    message(cmd, "\n"); system(cmd)
-  }
-  
-  foreach(i=1:length(bam_dedup_fp)) %dopar% {
-    cmd<-paste0("samtools index ",bam_dedup_fp[i])
-    message(cmd, "\n"); system(cmd)
-  }
-  system(paste0("cp -r temp/bam_dedup ", bam_dedup_output_folder))
-}
-
-#build metadata for experiment
-if (use_UMI==TRUE){
-  bam_fnames<-bam_dedup_fp
-} else {
-  bam_fnames <- bam_temp_fp
-}
 group_desig<-rep(group_name, times=length(bam_fnames))
 md<-read.csv("references/blank_metadata.csv", header = TRUE)
 newrow<-data.frame(bamfile=bam_fnames, directory=getwd(),Short.name=mid_names,Targeting.type="",sgRNA1="",sgRNA2="",Group=group_desig)

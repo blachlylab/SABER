@@ -27,6 +27,7 @@ def INPUTSAMPLES(wildcards):
     r = re.compile("(.*)(_S[0-9].*)?(_L00[1-9])?_R[12](_001)?.fastq.gz")
     fq_files= list(filter(r.match,fq_files))
     SAMPLES=list(set([r.match(x).group(1)[len(output)+1::] for x in fq_files]))
+    print(SAMPLES)
     return SAMPLES
 
 def remapSampleToFastq(wildcards):
@@ -57,6 +58,10 @@ def umi_bam_switch(wildcards):
     else:
         return expand(wildcards.project+"_output/bam/{sample}.bam.bai",sample=INPUTSAMPLES(wildcards))
 
+def multiqc_input(wildcards):
+    return expand("{project}_output/fastqc/{sample}_fastqc.html",sample=INPUTSAMPLES(wildcards),project=wildcards.project)
+
+
 rule normal_run:
     input: "gestalt_output/analysis.done","gestalt_output/multiqc/multiqc_report.html"
 
@@ -79,7 +84,7 @@ rule decompress:
 rule merge_read_pairs:
     input:remapSampleToFastq
     output:"{project}_output/fastq_merged/{sample}.assembled.fastq"
-    log:"logs/pear/{sample}.PEARreport.txt"
+    log:"{project}_logs/pear/{sample}.PEARreport.txt"
     conda:"envs/tools-env.yaml"
     threads:1
     shell:"pear -j {threads} -f {input[0]} -r {input[1]} -o output/fastq_merged/{wildcards.sample} > {log}"
@@ -118,23 +123,23 @@ rule fastqc:
 
 # run multiqc to summarize the qc files
 rule multiqc:
-    input:expand("{project}_output/fastqc/{sample}_fastqc.html",sample=SAMPLES)
+    input: multiqc_input
     output:"{project}_output/multiqc/multiqc_report.html"
     conda:"envs/tools-env.yaml"
-    shell:"multiqc -d output/fastqc/ -o output/multiqc/"
+    shell:"multiqc -d {wildcards.project}_output/fastqc/ -o {wildcards.project}_output/multiqc/"
 
 # extract UMI tags (optional)
 rule umi_extract:
     input:"{project}_output/cutadapt3p/{sample}.fastq"
     output:"{project}_output/fastq_umi/{sample}.fastq"
-    log:"logs/umi_extract/{sample}.log"
+    log:"{project}_logs/umi_extract/{sample}.log"
     conda:"envs/tools-env.yaml"
     shell:"umi_tools extract --stdin={input} --bc-pattern=XXXXXXXXXXXXXXXXXNNNNNNNNNN --log={log} --stdout={output}"
 
 rule needleall:
     input:umi_trim_switch
     output:"{project}_output/needleall/{sample}.sam"
-    log:"logs/needleall/{sample}.error"
+    log:"{project}_logs/needleall/{sample}.error"
     conda:"envs/tools-env.yaml"
     shell:"needleall -aformat3 sam -gapextend 0.25 -gapopen 10.0 -awidth3=5000 -asequence references/gestalt_pipeline4.fasta -bsequence {input} -outfile {output} -errfile {log}"
 
@@ -164,11 +169,14 @@ rule dedup:
 
 rule analysis:
     input:umi_bam_switch
-    output:touch("gestalt_output/analysis.done")
+    output:touch("{project}_output/analysis.done")
     conda:"envs/r-env.yaml"
+    params: 
+        script= lambda wildcards: "analysis" if wildcards.project=="testing" else "validation",
+        bams= lambda wildcards: wildcards.project+"_output/dedup" if config["use_umi"] else wildcards.project+"_output/bam"
     shell:"""
     Rscript scripts/installrpy.R
-    Rscript scripts/analysis.R
+    Rscript scripts/{params.script}.R {params.bams}
     """
 
 rule testing_analysis:
